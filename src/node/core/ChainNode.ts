@@ -2,6 +2,14 @@ import { CallbackSinkNode } from "../ToolPipelineNode";
 import { Message, Node } from "./Node";
 import type { ParallelNode } from "./ParallelNode";
 
+/**
+ * ChainNode：将多个节点按顺序串联（pipeline/chain）。
+ *
+ * @remarks
+ * - 通过 `node()/stage()/pipe()` 在 build-time 组装 children
+ * - 运行时：输入从 head 进入，沿 wiring 依次流动；末端通过内部 bridge 回到本节点，再 `dispatch()` 给下游
+ * - `Pipeline` 会把 ChainNode 视为一个 anchor（children 由 ChainNode 管理并在其 `onStart/onDispose` 中启动/销毁）
+ */
 export class ChainNode<TIn, TOut = TIn> extends Node<TIn, TOut> {
     private readonly children: Node<unknown, unknown>[] = [];
     private head: Node<TIn, unknown> | null = null;
@@ -9,6 +17,9 @@ export class ChainNode<TIn, TOut = TIn> extends Node<TIn, TOut> {
 
     private readonly bridge: CallbackSinkNode<TOut>;
 
+    /**
+     * @param name 节点名称（用于日志/诊断）
+     */
     constructor(name?: string) {
         super(name);
         this.bridge = new CallbackSinkNode<TOut>(
@@ -18,18 +29,30 @@ export class ChainNode<TIn, TOut = TIn> extends Node<TIn, TOut> {
         );
     }
 
+    /**
+     * 在 chain 末尾追加一个节点，并返回“类型更新后的 chain”。
+     *
+     * @remarks
+     * build-time only：start 之后禁止改结构。
+     */
     public node<TNext>(node: Node<TOut, TNext>): ChainNode<TIn, TNext> {
         this.assertBuildTime("add node via node()");
         this.addNodeInternal(node);
         return this as unknown as ChainNode<TIn, TNext>;
     }
 
+    /**
+     * 语义别名：追加一个并行 stage（ParallelNode）。
+     */
     public stage<TNext>(
         stage: ParallelNode<TOut, TNext>,
     ): ChainNode<TIn, TNext> {
         return this.node(stage);
     }
 
+    /**
+     * 语义别名：把另一个 ChainNode 作为一个 stage 接到当前末尾。
+     */
     public pipe<TNext>(
         pipeline: ChainNode<TOut, TNext>,
     ): ChainNode<TIn, TNext> {
@@ -77,6 +100,12 @@ export class ChainNode<TIn, TOut = TIn> extends Node<TIn, TOut> {
         await this.head.receive(msg);
     }
 
+    /**
+     * 启动顺序：downstream -> upstream。
+     *
+     * @remarks
+     * 先启动 bridge，再逆序启动 children，确保消息投递时下游已 ready。
+     */
     protected async onStart(): Promise<void> {
         if (!this.head || !this.tail) return;
 
@@ -109,6 +138,9 @@ export class ChainNode<TIn, TOut = TIn> extends Node<TIn, TOut> {
         }
     }
 
+    /**
+     * 销毁所有 children 与 bridge（best-effort），并汇总输出错误日志。
+     */
     protected async onDispose(): Promise<void> {
         const r1 = await Promise.allSettled(
             this.children.map((n) => (n as Node<any, any>).dispose()),
@@ -127,8 +159,13 @@ export class ChainNode<TIn, TOut = TIn> extends Node<TIn, TOut> {
         }
     }
 
+    /**
+     * 组合节点声明：children 会被 Pipeline 作为 managed nodes 收集。
+     *
+     * @remarks
+     * 注意：这里不返回 `bridge`（它是内部实现细节），避免干扰 Pipeline 的拓扑推导。
+     */
     public getManagedNodes(): ReadonlyArray<Node<any, any>> {
-        // Include bridge so Pipeline.strict can account for children -> bridge edges.
         return [...this.children];
     }
 

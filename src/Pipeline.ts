@@ -10,6 +10,20 @@ export interface AddOptions {
     keepAlive?: boolean;
 }
 
+/**
+ * Pipeline：负责将一组 Node 作为一个“编排单元”来启动/销毁。
+ *
+ * @remarks
+ * **你需要它解决什么问题**
+ * - 自动推导安全的启动顺序：确保 consumer 先启动，再启动 producer（避免 “上游 dispatch 但下游未 start”）
+ * - 按依赖拓扑启动/销毁：支持 class 级依赖（`static dependency`）
+ * - 组合节点（Composite）：通过 `getManagedNodes()` 将内部子图折叠为 anchor，避免内部实现细节影响拓扑
+ *
+ * **术语**
+ * - managed nodes：`Pipeline` 实际管理（会 start/dispose）的节点集合
+ * - anchor：一个 managed node 的 ultimate owner（沿 `ownerOf` 追溯到最外层组合节点）
+ * - wiring：`producer.register(consumer)` 形成的数据流边
+ */
 export class Pipeline {
     private readonly roots = new Set<AnyNode>();
 
@@ -27,6 +41,13 @@ export class Pipeline {
     private readonly keepAliveRoots = new Set<AnyNode>();
     private keepAliveAnchors = new Set<AnyNode>();
 
+    /**
+     * 将一个节点纳入 Pipeline 管理（build-time only）。
+     *
+     * @remarks
+     * - `Pipeline.start()` 只会启动被 `add()` 纳入的节点（以及它们通过 `getManagedNodes()` 暴露的子节点）。
+     * - 建议把“参与 wiring 的上下游双方”都 `add()` 进来；否则 `Pipeline` 不会管理缺失的一侧。
+     */
     public add(node: AnyNode, options: AddOptions = {}): this {
         if (this.started) {
             throw new Error(
@@ -42,6 +63,16 @@ export class Pipeline {
         return this;
     }
 
+    /**
+     * 启动整个编排（幂等）。
+     *
+     * @remarks
+     * 启动顺序来自拓扑排序：满足
+     * - class 依赖：provider 先启动
+     * - wiring 依赖：consumer 先启动
+     *
+     * 若启动中途失败，会按已启动顺序逆序回滚 dispose。
+     */
     public async start(): Promise<void> {
         if (this.started) return;
 
@@ -66,6 +97,13 @@ export class Pipeline {
         }
     }
 
+    /**
+     * 销毁整个编排（可重复调用）。
+     *
+     * @remarks
+     * - 如果未 build 过（仅 add 但未 start），则仅对 roots 做 best-effort dispose。
+     * - 如果已 build，则按拓扑逆序 dispose（dependents 先，providers 后）。
+     */
     public async dispose(): Promise<void> {
         if (!this.built) {
             await Promise.allSettled([...this.roots].map((r) => r.dispose()));
@@ -157,6 +195,13 @@ export class Pipeline {
         }
     }
 
+    /**
+     * 将任意 managed node 映射到其 ultimate anchor（最外层 owner）。
+     *
+     * @remarks
+     * 对组合节点（如 ChainNode/ParallelNode）而言，其内部子节点会被折叠到该组合节点作为 anchor，
+     * 从而让 `Pipeline` 在更高层级上进行拓扑编排。
+     */
     private getUltimateAnchor(node: AnyNode): AnyNode {
         let cur: AnyNode = node;
         for (;;) {
@@ -270,6 +315,11 @@ export class Pipeline {
         return { edges, indeg, outdeg };
     }
 
+    /**
+     * Kahn 拓扑排序。
+     *
+     * @throws 当存在环时抛错（无法给出确定的启动顺序）。
+     */
     private kahnTopoSort(
         nodes: AnyNode[],
         edges: Map<AnyNode, Set<AnyNode>>,

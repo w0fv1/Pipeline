@@ -11,6 +11,10 @@ export abstract class TimeEmitterNode<TIn = unknown, TOut = unknown>
     private timer: NodeJS.Timeout | null = null;
     private intervalMs: number;
 
+    /**
+     * @param intervalMs 定时器间隔（ms）
+     * @param name 节点名称（用于日志/诊断）
+     */
     public constructor(
         intervalMs: number,
         name?: string,
@@ -19,10 +23,16 @@ export abstract class TimeEmitterNode<TIn = unknown, TOut = unknown>
         this.intervalMs = normalizeIntervalMs(intervalMs);
     }
 
+    /**
+     * 当前定时器间隔（ms）。
+     */
     protected getTimerIntervalMs(): number {
         return this.intervalMs;
     }
 
+    /**
+     * 动态更新 interval（运行时生效）。
+     */
     public updateIntervalMs(intervalMs: number): void {
         this.intervalMs = normalizeIntervalMs(intervalMs);
 
@@ -35,11 +45,21 @@ export abstract class TimeEmitterNode<TIn = unknown, TOut = unknown>
         this.restartTimer();
     }
 
+    /**
+     * 定时 tick 时的产出逻辑（由子类实现）。
+     */
     protected abstract onTickProduce(): Promise<void>;
+
+    /**
+     * 定时器启动前的初始化（只会在 `start()` 时执行一次）。
+     */
     protected abstract onTimerStart(): Promise<void>;
     protected onTimerError?(error: unknown): void | Promise<void>;
     protected async onTimerDispose(): Promise<void> {}
 
+    /**
+     * 启动：先执行 `onTimerStart()`，再创建定时器。
+     */
     protected override async onStart(): Promise<void> {
         await this.onTimerStart();
 

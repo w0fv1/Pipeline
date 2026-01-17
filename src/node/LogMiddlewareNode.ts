@@ -4,6 +4,11 @@ type LoggerLike =
   & Pick<Console, "log" | "error">
   & Partial<Pick<Console, "clear">>;
 
+/**
+ * 日志输出格式。
+ * - `raw`：直接输出 msg.data
+ * - `json`：尝试 `JSON.stringify(msg.data)`
+ */
 export type LogFormat =
   | "raw"
   | "json";
@@ -39,6 +44,13 @@ export interface LogMiddlewareOptions<TIn = unknown> {
   logMeta?: boolean;
 }
 
+/**
+ * LogMiddlewareNode：用于观测/诊断的“旁路中间件”。
+ *
+ * @remarks
+ * - 不改变数据：收到 `TIn`，日志后原样 `dispatch(TIn)`
+ * - 支持：业务日志、节流、按 key 分组节流、统计窗口、定期 stats 输出、可选清屏
+ */
 export class LogMiddlewareNode<TIn = unknown> extends Node<TIn, TIn> {
   private readonly recentTimestamps: number[] = [];
   private recentHead = 0;
@@ -70,7 +82,12 @@ export class LogMiddlewareNode<TIn = unknown> extends Node<TIn, TIn> {
     this.logger = logger ?? console;
   }
 
-  /** 允许运行时动态调整开关/参数 */
+  /**
+   * 允许运行时动态调整开关/参数。
+   *
+   * @remarks
+   * 会清空窗口状态，避免旧统计干扰新参数下的观测。
+   */
   public setOptions(patch: LogMiddlewareOptions<TIn>): void {
     this.options = { ...this.options, ...patch } as Required<
       LogMiddlewareOptions<TIn>
